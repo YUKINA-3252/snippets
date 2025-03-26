@@ -30,7 +30,7 @@ from sensor_msgs.msg import CompressedImage, Image, JointState
 class DummyEpisode:
     images: np.ndarray
     states: np.ndarray
-    actions: np.ndarray
+    # actions: np.ndarray
 
     @classmethod
     def create(cls, T: int):
@@ -51,7 +51,8 @@ class DummyEpisode:
 
 @dataclass
 class RosbagEpisode:
-    images: np.ndarray
+    head_images: np.ndarray
+    second_images: np.ndarray
     states: np.ndarray
     actions: np.ndarray
     action_buf = []
@@ -70,7 +71,7 @@ class RosbagEpisode:
         for topic, msg in zip(config['topics'], msgs):
             if topic == config['action_topic']:  # action
                 data = np.array(msg.data).astype(np.float32)
-                # config['action_buf'].append(data)
+                config['action_buf'].append(data)
                 RosbagEpisode.action_buf.append(data)
             else:
                 if "Image" in msg._type:
@@ -123,12 +124,6 @@ class RosbagEpisode:
             subscribers[topic] = message_filters.Subscriber(topic, msg_type)
 
         img_bridge = CvBridge()
-        ts = message_filters.ApproximateTimeSynchronizer(
-            subscribers.values(),
-            queue_size=mf_cfg.queue_size,
-            slop=mf_cfg.slop,
-            allow_headerless=False,
-        )
 
         config_dict = {
             'topics': topics,
@@ -142,6 +137,13 @@ class RosbagEpisode:
             'actions': config.actions
             }
 
+        ts = message_filters.ApproximateTimeSynchronizer(
+            subscribers.values(),
+            queue_size=mf_cfg.queue_size,
+            slop=mf_cfg.slop,
+            allow_headerless=False,
+        )
+
         ts.registerCallback(partial(cls.callback, config_dict))
         # obs_buf = dict()
         RosbagEpisode.action_buf = []
@@ -154,9 +156,9 @@ class RosbagEpisode:
         for message_idx, (topic, msg, t) in enumerate(
                 bag_reader.read_messages(topics=topics)
                 ):
-                    subscriber = subscribers.get(topic)
-                    if subscriber:
-                        subscriber.signalMessage(msg)
+            subscriber = subscribers.get(topic)
+            if subscriber:
+                subscriber.signalMessage(msg)
 
         # action
         if config.actions.type == "action_trajectory":
@@ -176,10 +178,12 @@ class RosbagEpisode:
         for obs_key, obs_data in RosbagEpisode.obs_buf.items():
             obs_data = np.array(obs_data)
             if obs_key == 'head_image':
-                images = np.array(obs_data)
+                head_images = np.array(obs_data)
+            if obs_key == 'second_image':
+                second_images = np.array(obs_data)
             if obs_key == 'robot_state':
                 states = np.array(obs_data)
-        return cls(images, states, actions)
+        return cls(head_images, second_images, states, actions)
 
 if __name__ == "__main__":
     rospy.Time = RosUtils.PatchTimer

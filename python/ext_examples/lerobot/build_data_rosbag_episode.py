@@ -20,8 +20,8 @@ import torch
 # import torchvision
 
 from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
-from lerobot.common.policies.diffusion.configuration_diffusion import DiffusionConfig
-from lerobot.common.policies.diffusion.modeling_diffusion import DiffusionPolicy
+# from lerobot.common.policies.diffusion.configuration_diffusion import DiffusionConfig
+from lerobot.common.policies.diffusion.modeling_diffusion import DiffusionPolicy, DiffusionConfig
 from lerobot.common.datasets.compute_stats import compute_stats
 
 from build_data_from_rosbag import RosbagEpisode
@@ -63,12 +63,14 @@ def convert_to_lerobot_dataset(
     # create data dict
     ep_dicts = []
     for idx, ep in enumerate(episodes):
-        T = len(ep.images)
+        T = len(ep.head_images)
         dones = torch.zeros(T, dtype=torch.bool)
         dones[-1] = True
 
         ep_dict = {}
-        ep_dict["observation.image"] = [PILImage.fromarray(im) for im in ep.images]
+        # ep_dict["observation.image"] = [PILImage.fromarray(im) for im in ep.head_images]
+        ep_dict["observation.image.head"] = [PILImage.fromarray(im) for im in ep.head_images]
+        ep_dict["observation.image.second"] = [PILImage.fromarray(im) for im in ep.second_images]
         ep_dict["observation.state"] = torch.from_numpy(ep.states).float()
         ep_dict["action"] = torch.from_numpy(ep.actions).float()
         ep_dict["episode_index"] = torch.ones(T, dtype=torch.int64) * idx
@@ -85,7 +87,9 @@ def convert_to_lerobot_dataset(
     dim_action = len(episodes[0].actions[0])
     features = Features(
         {
-            "observation.image": Image(),
+            # "observation.image": Image(),
+            "observation.image.head": Image(),
+            "observation.image.second": Image(),
             "observation.state": Sequence(Value("float32"), length=dim_state),
             "action": Sequence(Value("float32"), length=dim_action),
             "episode_index": Value("int64"),
@@ -117,7 +121,7 @@ def convert_to_lerobot_dataset(
 
 
 if __name__ == "__main__":
-    output_directory = Path("outputs/train/warpping")
+    output_directory = Path("outputs/train/wrapping")
     output_directory.mkdir(parents=True, exist_ok=True)
 
     # episode_list = []
@@ -126,9 +130,10 @@ if __name__ == "__main__":
     with open('data/rosbag_episode.pkl', 'rb') as file:
         episode_list = pickle.load(file)
     dataset = convert_to_lerobot_dataset(episode_list, 10)
-    print(dataset)
     delta_timestamps = {
-        "observation.image": [-0.1, 0.0],
+        # "observation.image": [-0.1, 0.0],
+        "observation.image.head": [-0.1, 0.0],
+        "observation.image.second": [-0.1, 0.0],
         "observation.state": [-0.1, 0.0],
         "action": [-0.1, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4],
     }
@@ -138,8 +143,17 @@ if __name__ == "__main__":
     device = torch.device("cuda")
     log_freq = 250
 
-    cfg = DiffusionConfig()
-    print(dataset.stats)
+    cfg = DiffusionConfig(use_separate_rgb_encoder_per_camera=True)
+    effective_keys = list(cfg.output_shapes.keys()) + list(cfg.input_shapes.keys()) + ["episode_index", "frame_indx", "index", "next.done",  "timestamp"]
+    effective_key_set = set(effective_keys)
+    for key, value in dataset.stats.items():
+        if key not in effective_key_set:
+            continue
+        inner_dict = {}
+        for key_inner, value_inner in value.items():
+            inner_dict[key_inner] = torch.tensor(value_inner)
+        dataset.stats[key] = inner_dict
+
     policy = DiffusionPolicy(cfg, dataset_stats=dataset.stats)
     policy.train()
     policy.to(device)
